@@ -7,7 +7,7 @@ Support CloudFlare NameServer or you can add your own NameServer
 
 How to execute:
 
-git clone $URL
-unzip $REPO
-chmod +x $REPO_GIT
-python3 $REPO_GIT
+git clone $URL<br>
+unzip $REPO<br>
+chmod +x $REPO_GIT<br>
+python3 $REPO_GIT<br>
