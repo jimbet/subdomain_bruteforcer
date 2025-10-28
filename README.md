@@ -2,8 +2,11 @@
 Finding a hidden subdomain for any TLD
 
 To brute-force a subdomain for any TLD
+
 For Linux environment only!
+
 Support CloudFlare NameServer, or you can add your own NameServer
+
 You can also use your own wordlist, either local/online
 
 
