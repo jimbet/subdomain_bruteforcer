@@ -5,7 +5,7 @@ Combines dig with multiple OSINT sources for deep subdomain discovery
 
 Author: Sir Jimbet
 Version: 3.1.0
-Features: dig + OSINT + Brute Force + Color Output
+Features: dig + OSINT + Brute Force + Color Outputexa
 """
 
 import subprocess
@@ -1010,7 +1010,7 @@ if __name__ == "__main__":
         elif wordlist_choice == "3":
             # Load from URL
             # example URL
-            print(f"{Colors.INFO}**Popular subdomain wordlists:**{Colors.ENDC}")
+            print(f"{Colors.INFO}**Popular subdomain wordlists:Please copy-paste! :**{Colors.ENDC}")
             print(f"{Colors.INFO}https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-5000.txt{Colors.ENDC}")
             print(f"{Colors.INFO}https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-20000.txt{Colors.ENDC}")
             print(f"{Colors.INFO}https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/fierce-hostlist.txt{Colors.ENDC}")
