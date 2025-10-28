@@ -1,5 +1,4 @@
 # subdomain_bruteforcer
-Finding a hidden subdomain for any TLD
 
 To brute-force a subdomain for any TLD
 
