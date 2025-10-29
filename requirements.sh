@@ -18,6 +18,7 @@ sudo systemctl start tor
 sudo systemctl enable tor
 
 ### If using Windows, you have to install GIT and Microsoft C++ Distribution Tool 14.x
+### Download TOR - https://www.torproject.org/download/tor/
 
 # Verify installation
 echo "=== Verification ==="
