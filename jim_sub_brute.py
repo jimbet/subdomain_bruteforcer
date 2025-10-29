@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Advanced Subdomain Enumerator - Inspired by Sublist3r
+Advanced Subdomain Enumerator
 Combines DNS resolution with multiple OSINT sources for deep subdomain discovery
 
 Author: Sir Jimbet
-Version: 3.2.0
-Features: dnspython + OSINT + Brute Force + Color Output
+Version: 3.3.0
+Features: dnspython + OSINT + Brute Force + Color Output + Free SSL + TOR/Proxy Support
 """
 
 import concurrent.futures
@@ -18,6 +18,7 @@ import time
 import warnings
 import dns.resolver
 import dns.exception
+import random
 
 # Suppress SSL warnings for problematic sources
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
@@ -170,18 +171,160 @@ class CloudflareEnumerator:
         return all_subdomains
 
 
+class ProxyManager:
+    """
+    Proxy and TOR management for anonymous OSINT operations.
+    """
+    
+    def __init__(self, use_tor: bool = False, proxy_list: Optional[List[str]] = None, 
+                 rotate_proxy: bool = False):
+        self.use_tor = use_tor
+        self.proxy_list = proxy_list or []
+        self.rotate_proxy = rotate_proxy
+        self.current_proxy_index = 0
+        self.tor_available = False
+        
+        if use_tor:
+            self.tor_available = self._check_tor_connection()
+    
+    def _check_tor_connection(self) -> bool:
+        """Check if TOR is running on default SOCKS port"""
+        try:
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            result = sock.connect_ex(('127.0.0.1', 9050))
+            sock.close()
+            return result == 0
+        except:
+            return False
+    
+    def get_proxy_config(self) -> Optional[Dict[str, str]]:
+        """Get current proxy configuration"""
+        if self.use_tor and self.tor_available:
+            return {
+                'http': 'socks5h://127.0.0.1:9050',
+                'https': 'socks5h://127.0.0.1:9050'
+            }
+        elif self.proxy_list and len(self.proxy_list) > 0:
+            if self.rotate_proxy:
+                # Rotate through proxy list
+                proxy = self.proxy_list[self.current_proxy_index]
+                self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxy_list)
+            else:
+                proxy = self.proxy_list[0]
+            
+            return {
+                'http': proxy,
+                'https': proxy
+            }
+        return None
+    
+    def get_random_user_agent(self) -> str:
+        """Get a random user agent for better anonymity"""
+        user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+            'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0',
+        ]
+        import random
+        return random.choice(user_agents)
+    
+    def test_tor_connection(self) -> bool:
+        """Test if TOR is working by checking IP"""
+        try:
+            import requests
+            session = requests.Session()
+            session.proxies = self.get_proxy_config()
+            response = session.get('https://check.torproject.org/api/ip', timeout=10)
+            data = response.json()
+            return data.get('IsTor', False)
+        except:
+            return False
+
+
 class OSINTEnumerator:
     """
     OSINT-based subdomain discovery using multiple public sources.
     """
     
-    def __init__(self, domain: str, timeout: int = 10):
+    def __init__(self, domain: str, timeout: int = 10, verbose: bool = False, 
+                 proxy_manager: Optional[ProxyManager] = None):
         self.domain = domain
         self.timeout = timeout
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
+        self.verbose = verbose
+        self.proxy_manager = proxy_manager
+        self.session = self._create_session()
+    
+    def _create_session(self) -> requests.Session:
+        """Create requests session with proxy support"""
+        session = requests.Session()
+        
+        # Set user agent
+        if self.proxy_manager:
+            user_agent = self.proxy_manager.get_random_user_agent()
+        else:
+            user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        
+        session.headers.update({'User-Agent': user_agent})
+        
+        # Configure proxy if available
+        if self.proxy_manager:
+            proxies = self.proxy_manager.get_proxy_config()
+            if proxies:
+                session.proxies.update(proxies)
+                if self.verbose:
+                    if self.proxy_manager.use_tor:
+                        print(f"      {Colors.INFO}[i]{Colors.ENDC} Using TOR network")
+                    else:
+                        print(f"      {Colors.INFO}[i]{Colors.ENDC} Using proxy: {list(proxies.values())[0]}")
+        
+        # Add retries for failed requests
+        from requests.adapters import HTTPAdapter
+        try:
+            from urllib3.util.retry import Retry
+            
+            retry_strategy = Retry(
+                total=2,
+                backoff_factor=1,
+                status_forcelist=[429, 500, 502, 503, 504],
+            )
+            adapter = HTTPAdapter(max_retries=retry_strategy)
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+        except ImportError:
+            # urllib3 might not have Retry in older versions
+            pass
+        
+        return session
+    
+    def _get_with_retry(self, url: str, **kwargs) -> Optional[requests.Response]:
+        """Make request with proxy rotation on failure"""
+        if not self.proxy_manager or not self.proxy_manager.rotate_proxy:
+            return self.session.get(url, **kwargs)
+        
+        # Try with different proxies if rotation is enabled
+        max_attempts = min(3, len(self.proxy_manager.proxy_list)) if self.proxy_manager.proxy_list else 1
+        
+        for attempt in range(max_attempts):
+            try:
+                # Rotate proxy for each attempt
+                proxies = self.proxy_manager.get_proxy_config()
+                if proxies:
+                    self.session.proxies.update(proxies)
+                
+                response = self.session.get(url, **kwargs)
+                if response.status_code == 200:
+                    return response
+            except Exception as e:
+                if self.verbose and attempt < max_attempts - 1:
+                    print(f"      {Colors.WARNING}[!]{Colors.ENDC} Proxy failed, rotating...")
+                continue
+        
+        return None
     
     def search_crtsh(self) -> Set[str]:
         """Search Certificate Transparency logs via crt.sh"""
@@ -190,20 +333,32 @@ class OSINTEnumerator:
         
         try:
             url = f"https://crt.sh/?q=%.{self.domain}&output=json"
-            response = self.session.get(url, timeout=self.timeout)
+            response = self._get_with_retry(url, timeout=self.timeout)
             
-            if response.status_code == 200:
-                data = response.json()
-                for entry in data:
-                    name = entry.get('name_value', '')
-                    for subdomain in name.split('\n'):
-                        subdomain = subdomain.strip().replace('*.', '')
-                        if subdomain.endswith(self.domain) and subdomain:
-                            subdomains.add(subdomain)
-                
-                print(f"      {Colors.SUCCESS}✓{Colors.ENDC} Found {Colors.HIGHLIGHT}{len(subdomains)}{Colors.ENDC} subdomains from crt.sh")
+            if response and response.status_code == 200:
+                try:
+                    data = response.json()
+                    for entry in data:
+                        name = entry.get('name_value', '')
+                        for subdomain in name.split('\n'):
+                            subdomain = subdomain.strip().replace('*.', '')
+                            if subdomain.endswith(self.domain) and subdomain:
+                                subdomains.add(subdomain)
+                    
+                    print(f"      {Colors.SUCCESS}✓{Colors.ENDC} Found {Colors.HIGHLIGHT}{len(subdomains)}{Colors.ENDC} subdomains from crt.sh")
+                except json.JSONDecodeError:
+                    if self.verbose:
+                        print(f"      {Colors.ERROR}✗{Colors.ENDC} crt.sh returned invalid JSON")
+            else:
+                if self.verbose:
+                    print(f"      {Colors.ERROR}✗{Colors.ENDC} crt.sh returned status {response.status_code if response else 'No response'}")
+        except requests.exceptions.Timeout:
+            print(f"      {Colors.ERROR}✗{Colors.ENDC} crt.sh timed out (skipped)")
         except Exception as e:
-            print(f"      {Colors.ERROR}✗{Colors.ENDC} crt.sh unavailable (skipped)")
+            if self.verbose:
+                print(f"      {Colors.ERROR}✗{Colors.ENDC} crt.sh error: {str(e)}")
+            else:
+                print(f"      {Colors.ERROR}✗{Colors.ENDC} crt.sh unavailable (skipped)")
         
         return subdomains
     
@@ -364,6 +519,135 @@ class OSINTEnumerator:
         
         return subdomains
     
+    def search_letsencrypt_crt(self) -> Set[str]:
+        """Search Let's Encrypt certificates via crt.sh (filtered by CA)"""
+        print(f"  {Colors.INFO}[*]{Colors.ENDC} Searching Let's Encrypt certificates...")
+        subdomains = set()
+        
+        try:
+            # Search for Let's Encrypt issued certificates
+            url = f"https://crt.sh/?q=%.{self.domain}&output=json"
+            response = self.session.get(url, timeout=self.timeout)
+            
+            if response.status_code == 200:
+                data = response.json()
+                for entry in data:
+                    # Check if issued by Let's Encrypt
+                    issuer = entry.get('issuer_name', '').lower()
+                    if "let's encrypt" in issuer or 'letsencrypt' in issuer:
+                        name = entry.get('name_value', '')
+                        for subdomain in name.split('\n'):
+                            subdomain = subdomain.strip().replace('*.', '')
+                            if subdomain.endswith(self.domain) and subdomain:
+                                subdomains.add(subdomain)
+                
+                print(f"      {Colors.SUCCESS}✓{Colors.ENDC} Found {Colors.HIGHLIGHT}{len(subdomains)}{Colors.ENDC} subdomains from Let's Encrypt")
+        except Exception as e:
+            print(f"      {Colors.ERROR}✗{Colors.ENDC} Let's Encrypt search unavailable (skipped)")
+        
+        return subdomains
+    
+    def search_zerossl_crt(self) -> Set[str]:
+        """Search ZeroSSL certificates via crt.sh (filtered by CA)"""
+        print(f"  {Colors.INFO}[*]{Colors.ENDC} Searching ZeroSSL certificates...")
+        subdomains = set()
+        
+        try:
+            url = f"https://crt.sh/?q=%.{self.domain}&output=json"
+            response = self.session.get(url, timeout=self.timeout)
+            
+            if response.status_code == 200:
+                data = response.json()
+                for entry in data:
+                    # Check if issued by ZeroSSL
+                    issuer = entry.get('issuer_name', '').lower()
+                    if 'zerossl' in issuer or 'sectigo' in issuer:
+                        name = entry.get('name_value', '')
+                        for subdomain in name.split('\n'):
+                            subdomain = subdomain.strip().replace('*.', '')
+                            if subdomain.endswith(self.domain) and subdomain:
+                                subdomains.add(subdomain)
+                
+                print(f"      {Colors.SUCCESS}✓{Colors.ENDC} Found {Colors.HIGHLIGHT}{len(subdomains)}{Colors.ENDC} subdomains from ZeroSSL")
+        except Exception as e:
+            print(f"      {Colors.ERROR}✗{Colors.ENDC} ZeroSSL search unavailable (skipped)")
+        
+        return subdomains
+    
+    def search_free_ssl_providers(self) -> Set[str]:
+        """Search certificates from all major free SSL providers"""
+        print(f"  {Colors.INFO}[*]{Colors.ENDC} Searching Free SSL Providers (Let's Encrypt, ZeroSSL, etc.)...")
+        subdomains = set()
+        
+        try:
+            url = f"https://crt.sh/?q=%.{self.domain}&output=json"
+            response = self.session.get(url, timeout=self.timeout)
+            
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    
+                    # Track stats for each provider
+                    providers_count = defaultdict(int)
+                    
+                    for entry in data:
+                        issuer = entry.get('issuer_name', '').lower()
+                        
+                        # Check for various free SSL providers
+                        is_free_ssl = False
+                        provider_name = "Unknown"
+                        
+                        if "let's encrypt" in issuer or 'letsencrypt' in issuer or 'r3' in issuer or 'e1' in issuer:
+                            is_free_ssl = True
+                            provider_name = "Let's Encrypt"
+                        elif 'zerossl' in issuer:
+                            is_free_ssl = True
+                            provider_name = "ZeroSSL"
+                        elif 'sectigo' in issuer and 'sectigo limited' in issuer:
+                            # Sectigo powers ZeroSSL
+                            is_free_ssl = True
+                            provider_name = "ZeroSSL/Sectigo"
+                        elif 'buypass' in issuer:
+                            is_free_ssl = True
+                            provider_name = "Buypass"
+                        elif 'ssl.com' in issuer:
+                            is_free_ssl = True
+                            provider_name = "SSL.com"
+                        elif 'google trust services' in issuer or 'gts' in issuer:
+                            is_free_ssl = True
+                            provider_name = "Google Trust"
+                        
+                        if is_free_ssl:
+                            name = entry.get('name_value', '')
+                            for subdomain in name.split('\n'):
+                                subdomain = subdomain.strip().replace('*.', '')
+                                if subdomain.endswith(self.domain) and subdomain:
+                                    subdomains.add(subdomain)
+                                    providers_count[provider_name] += 1
+                    
+                    # Print breakdown by provider
+                    if providers_count:
+                        print(f"      {Colors.SUCCESS}✓{Colors.ENDC} Found {Colors.HIGHLIGHT}{len(subdomains)}{Colors.ENDC} subdomains from free SSL providers:")
+                        for provider, count in sorted(providers_count.items(), key=lambda x: x[1], reverse=True):
+                            print(f"        - {Colors.INFO}{provider}{Colors.ENDC}: {count} certificates")
+                    else:
+                        print(f"      {Colors.WARNING}⚠{Colors.ENDC} No free SSL certificates found for this domain")
+                except json.JSONDecodeError:
+                    if self.verbose:
+                        print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers returned invalid JSON")
+            else:
+                if self.verbose:
+                    print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers returned status {response.status_code}")
+        except requests.exceptions.Timeout:
+            print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers timed out (skipped)")
+        except Exception as e:
+            if self.verbose:
+                print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers error: {str(e)}")
+            else:
+                print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers search unavailable (skipped)")
+        
+        return subdomains
+    
     def search_wayback(self) -> Set[str]:
         """Search Wayback Machine"""
         print(f"  {Colors.INFO}[*]{Colors.ENDC} Searching Wayback Machine...")
@@ -439,6 +723,7 @@ class OSINTEnumerator:
         
         sources = [
             self.search_crtsh,
+            self.search_free_ssl_providers,  # Searches Let's Encrypt, ZeroSSL, etc.
             self.search_hackertarget,
             self.search_threatcrowd,
             self.search_alienvault,
@@ -498,6 +783,126 @@ class DNSResolver:
         except Exception:
             return []
     
+    def get_mx_records(self, domain: str) -> List[Dict[str, any]]:
+        """Get MX (Mail Exchange) records for a domain"""
+        try:
+            answers = self.resolver.resolve(domain, 'MX')
+            mx_records = []
+            for rdata in answers:
+                mx_records.append({
+                    'priority': rdata.preference,
+                    'host': str(rdata.exchange).rstrip('.')
+                })
+            return sorted(mx_records, key=lambda x: x['priority'])
+        except Exception:
+            return []
+    
+    def get_txt_records(self, domain: str) -> List[str]:
+        """Get TXT records for a domain"""
+        try:
+            answers = self.resolver.resolve(domain, 'TXT')
+            txt_records = []
+            for rdata in answers:
+                # TXT records are returned as quoted strings, join them
+                txt_data = ' '.join([s.decode() if isinstance(s, bytes) else s for s in rdata.strings])
+                txt_records.append(txt_data)
+            return txt_records
+        except Exception:
+            return []
+    
+    def get_soa_record(self, domain: str) -> Optional[Dict[str, any]]:
+        """Get SOA (Start of Authority) record for a domain"""
+        try:
+            answers = self.resolver.resolve(domain, 'SOA')
+            for rdata in answers:
+                return {
+                    'mname': str(rdata.mname).rstrip('.'),
+                    'rname': str(rdata.rname).rstrip('.'),
+                    'serial': rdata.serial,
+                    'refresh': rdata.refresh,
+                    'retry': rdata.retry,
+                    'expire': rdata.expire,
+                    'minimum': rdata.minimum
+                }
+        except Exception:
+            return None
+    
+    def get_spf_record(self, domain: str) -> Optional[str]:
+        """Get SPF (Sender Policy Framework) record from TXT records"""
+        txt_records = self.get_txt_records(domain)
+        for record in txt_records:
+            if record.startswith('v=spf1'):
+                return record
+        return None
+    
+    def get_dmarc_record(self, domain: str) -> Optional[str]:
+        """Get DMARC (Domain-based Message Authentication) record"""
+        try:
+            dmarc_domain = f"_dmarc.{domain}"
+            txt_records = self.get_txt_records(dmarc_domain)
+            for record in txt_records:
+                if record.startswith('v=DMARC1'):
+                    return record
+        except Exception:
+            pass
+        return None
+    
+    def get_dkim_record(self, domain: str, selector: str = "default") -> Optional[str]:
+        """Get DKIM (DomainKeys Identified Mail) record"""
+        try:
+            dkim_domain = f"{selector}._domainkey.{domain}"
+            txt_records = self.get_txt_records(dkim_domain)
+            for record in txt_records:
+                if 'v=DKIM1' in record or 'p=' in record:
+                    return record
+        except Exception:
+            pass
+        return None
+    
+    def get_caa_records(self, domain: str) -> List[Dict[str, any]]:
+        """Get CAA (Certificate Authority Authorization) records"""
+        try:
+            answers = self.resolver.resolve(domain, 'CAA')
+            caa_records = []
+            for rdata in answers:
+                caa_records.append({
+                    'flags': rdata.flags,
+                    'tag': rdata.tag.decode() if isinstance(rdata.tag, bytes) else rdata.tag,
+                    'value': rdata.value.decode() if isinstance(rdata.value, bytes) else rdata.value
+                })
+            return caa_records
+        except Exception:
+            return []
+    
+    def get_srv_records(self, domain: str, service: str = "_http._tcp") -> List[Dict[str, any]]:
+        """Get SRV (Service) records"""
+        try:
+            srv_domain = f"{service}.{domain}"
+            answers = self.resolver.resolve(srv_domain, 'SRV')
+            srv_records = []
+            for rdata in answers:
+                srv_records.append({
+                    'priority': rdata.priority,
+                    'weight': rdata.weight,
+                    'port': rdata.port,
+                    'target': str(rdata.target).rstrip('.')
+                })
+            return srv_records
+        except Exception:
+            return []
+    
+    def get_ptr_record(self, ip: str) -> Optional[str]:
+        """Get PTR (Pointer/Reverse DNS) record for an IP"""
+        try:
+            import ipaddress
+            addr = ipaddress.ip_address(ip)
+            ptr = dns.reversename.from_address(str(addr))
+            answers = self.resolver.resolve(ptr, 'PTR')
+            for rdata in answers:
+                return str(rdata.target).rstrip('.')
+        except Exception:
+            return None
+    
     def is_cloudflare_ns(self, nameservers: List[str]) -> bool:
         """Check if nameservers belong to Cloudflare"""
         cloudflare_ns_patterns = [
@@ -553,6 +958,124 @@ class DNSResolver:
                 break
         
         return cnames
+    
+    def get_comprehensive_dns_info(self, domain: str) -> Dict[str, any]:
+        """Get comprehensive DNS information for a domain"""
+        print(f"\n{Colors.HEADER}{'='*60}{Colors.ENDC}")
+        print(f"{Colors.HEADER}Comprehensive DNS Information for {Colors.DOMAIN}{domain}{Colors.ENDC}")
+        print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}\n")
+        
+        dns_info = {
+            'domain': domain,
+            'nameservers': [],
+            'a_records': [],
+            'aaaa_records': [],
+            'mx_records': [],
+            'txt_records': [],
+            'soa_record': None,
+            'spf_record': None,
+            'dmarc_record': None,
+            'caa_records': [],
+            'srv_records': []
+        }
+        
+        # Get A records
+        print(f"  {Colors.INFO}[*]{Colors.ENDC} Querying A records...")
+        a_records = self.resolve(domain, 'A')
+        if a_records:
+            dns_info['a_records'] = a_records
+            for ip in a_records:
+                print(f"      {Colors.SUCCESS}✓{Colors.ENDC} A: {Colors.IP}{ip}{Colors.ENDC}")
+        else:
+            print(f"      {Colors.WARNING}⚠{Colors.ENDC} No A records found")
+        
+        # Get AAAA records (IPv6)
+        print(f"\n  {Colors.INFO}[*]{Colors.ENDC} Querying AAAA records (IPv6)...")
+        aaaa_records = self.resolve(domain, 'AAAA')
+        if aaaa_records:
+            dns_info['aaaa_records'] = aaaa_records
+            for ip in aaaa_records:
+                print(f"      {Colors.SUCCESS}✓{Colors.ENDC} AAAA: {Colors.IP}{ip}{Colors.ENDC}")
+        else:
+            print(f"      {Colors.WARNING}⚠{Colors.ENDC} No AAAA records found")
+        
+        # Get Nameservers
+        print(f"\n  {Colors.INFO}[*]{Colors.ENDC} Querying NS records...")
+        nameservers = self.get_nameservers(domain)
+        if nameservers:
+            dns_info['nameservers'] = nameservers
+            for ns in nameservers:
+                print(f"      {Colors.SUCCESS}✓{Colors.ENDC} NS: {Colors.INFO}{ns}{Colors.ENDC}")
+        else:
+            print(f"      {Colors.WARNING}⚠{Colors.ENDC} No NS records found")
+        
+        # Get MX records
+        print(f"\n  {Colors.INFO}[*]{Colors.ENDC} Querying MX records...")
+        mx_records = self.get_mx_records(domain)
+        if mx_records:
+            dns_info['mx_records'] = mx_records
+            for mx in mx_records:
+                print(f"      {Colors.SUCCESS}✓{Colors.ENDC} MX: {Colors.HIGHLIGHT}{mx['priority']}{Colors.ENDC} {Colors.DOMAIN}{mx['host']}{Colors.ENDC}")
+        else:
+            print(f"      {Colors.WARNING}⚠{Colors.ENDC} No MX records found")
+        
+        # Get TXT records
+        print(f"\n  {Colors.INFO}[*]{Colors.ENDC} Querying TXT records...")
+        txt_records = self.get_txt_records(domain)
+        if txt_records:
+            dns_info['txt_records'] = txt_records
+            for i, txt in enumerate(txt_records, 1):
+                # Truncate long records for display
+                display_txt = txt if len(txt) <= 80 else txt[:77] + "..."
+                print(f"      {Colors.SUCCESS}✓{Colors.ENDC} TXT[{i}]: {Colors.INFO}{display_txt}{Colors.ENDC}")
+        else:
+            print(f"      {Colors.WARNING}⚠{Colors.ENDC} No TXT records found")
+        
+        # Get SOA record
+        print(f"\n  {Colors.INFO}[*]{Colors.ENDC} Querying SOA record...")
+        soa_record = self.get_soa_record(domain)
+        if soa_record:
+            dns_info['soa_record'] = soa_record
+            print(f"      {Colors.SUCCESS}✓{Colors.ENDC} SOA:")
+            print(f"        Primary NS: {Colors.INFO}{soa_record['mname']}{Colors.ENDC}")
+            print(f"        Admin Email: {Colors.INFO}{soa_record['rname']}{Colors.ENDC}")
+            print(f"        Serial: {Colors.HIGHLIGHT}{soa_record['serial']}{Colors.ENDC}")
+        else:
+            print(f"      {Colors.WARNING}⚠{Colors.ENDC} No SOA record found")
+        
+        # Get SPF record
+        print(f"\n  {Colors.INFO}[*]{Colors.ENDC} Checking SPF record...")
+        spf_record = self.get_spf_record(domain)
+        if spf_record:
+            dns_info['spf_record'] = spf_record
+            display_spf = spf_record if len(spf_record) <= 80 else spf_record[:77] + "..."
+            print(f"      {Colors.SUCCESS}✓{Colors.ENDC} SPF: {Colors.INFO}{display_spf}{Colors.ENDC}")
+        else:
+            print(f"      {Colors.WARNING}⚠{Colors.ENDC} No SPF record found")
+        
+        # Get DMARC record
+        print(f"\n  {Colors.INFO}[*]{Colors.ENDC} Checking DMARC record...")
+        dmarc_record = self.get_dmarc_record(domain)
+        if dmarc_record:
+            dns_info['dmarc_record'] = dmarc_record
+            display_dmarc = dmarc_record if len(dmarc_record) <= 80 else dmarc_record[:77] + "..."
+            print(f"      {Colors.SUCCESS}✓{Colors.ENDC} DMARC: {Colors.INFO}{display_dmarc}{Colors.ENDC}")
+        else:
+            print(f"      {Colors.WARNING}⚠{Colors.ENDC} No DMARC record found")
+        
+        # Get CAA records
+        print(f"\n  {Colors.INFO}[*]{Colors.ENDC} Querying CAA records...")
+        caa_records = self.get_caa_records(domain)
+        if caa_records:
+            dns_info['caa_records'] = caa_records
+            for caa in caa_records:
+                print(f"      {Colors.SUCCESS}✓{Colors.ENDC} CAA: {Colors.HIGHLIGHT}{caa['tag']}{Colors.ENDC} \"{Colors.INFO}{caa['value']}{Colors.ENDC}\"")
+        else:
+            print(f"      {Colors.WARNING}⚠{Colors.ENDC} No CAA records found")
+        
+        print(f"\n{Colors.HEADER}{'='*60}{Colors.ENDC}\n")
+        
+        return dns_info
 
 
 class SubdomainEnumerator:
@@ -563,14 +1086,17 @@ class SubdomainEnumerator:
     
     def __init__(self, domain: str, timeout: int = 5, max_workers: int = 30, 
                  dns_server: Optional[str] = None, use_cloudflare: bool = False,
-                 detected_nameservers: Optional[List[str]] = None):
+                 detected_nameservers: Optional[List[str]] = None, verbose: bool = False,
+                 proxy_manager: Optional[ProxyManager] = None):
         self.domain = domain
         self.timeout = timeout
         self.max_workers = max_workers
         self.use_cloudflare = use_cloudflare
         self.detected_nameservers = detected_nameservers or []
+        self.verbose = verbose
+        self.proxy_manager = proxy_manager
         self.dns_resolver = DNSResolver(timeout=timeout, dns_server=dns_server, use_cloudflare=use_cloudflare)
-        self.osint_enum = OSINTEnumerator(domain, timeout=10)
+        self.osint_enum = OSINTEnumerator(domain, timeout=10, verbose=verbose, proxy_manager=proxy_manager)
         self.cloudflare_enum = CloudflareEnumerator(domain, timeout=10) if use_cloudflare else None
         self.dns_server = dns_server or (self.dns_resolver.dns_server if use_cloudflare else None)
     
@@ -739,7 +1265,8 @@ class SubdomainEnumerator:
         return report
     
     def export_json(self, subdomain_results: Dict[str, List[str]], 
-                   filename: str = "subdomain_results.json"):
+                   filename: str = "subdomain_results.json", 
+                   dns_info: Optional[Dict[str, any]] = None):
         """Export results to JSON file."""
         ip_groups = self.group_by_ip(subdomain_results)
         shared_ips = self.find_shared_ips(subdomain_results)
@@ -754,6 +1281,10 @@ class SubdomainEnumerator:
             "ip_groups": ip_groups,
             "shared_ips": shared_ips
         }
+        
+        # Add DNS info if provided
+        if dns_info:
+            output["dns_info"] = dns_info
         
         with open(filename, 'w') as f:
             json.dump(output, f, indent=2)
@@ -781,6 +1312,13 @@ if __name__ == "__main__":
         domain = domain.split('/')[0]
     
     print(f"\n{Colors.SUCCESS}✓ Target domain: {Colors.DOMAIN}{domain}{Colors.ENDC}")
+    
+    # Ask if user wants comprehensive DNS info first
+    dns_info_choice = input(f"\n{Colors.OKCYAN}Show comprehensive DNS information? (y/n, default=y): {Colors.ENDC}").strip().lower()
+    
+    if dns_info_choice != 'n':
+        temp_resolver = DNSResolver(timeout=5)
+        dns_info = temp_resolver.get_comprehensive_dns_info(domain)
     
     # Detect nameservers first
     print(f"\n{Colors.HEADER}{'='*60}{Colors.ENDC}")
@@ -918,6 +1456,75 @@ if __name__ == "__main__":
         else:
             print(f"{Colors.SUCCESS}✓ Using built-in wordlist ({len(common_wordlist)} subdomains){Colors.ENDC}")
     
+    # Ask if user wants verbose output
+    verbose_choice = input(f"\n{Colors.OKCYAN}Enable verbose error messages? (y/n, default=n): {Colors.ENDC}").strip().lower()
+    verbose_mode = verbose_choice in ['y', 'yes']
+    
+    # Ask about proxy/TOR usage
+    print(f"\n{Colors.HEADER}{'='*60}{Colors.ENDC}")
+    print(f"{Colors.HEADER}Anonymity & Proxy Options{Colors.ENDC}")
+    print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}")
+    print("  1. No proxy (direct connection)")
+    print("  2. Use TOR network (requires TOR service running)")
+    print("  3. Use custom proxy/proxies")
+    print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}")
+    
+    proxy_choice = input(f"\n{Colors.OKCYAN}Choose option (1-3, default=1): {Colors.ENDC}").strip() or "1"
+    
+    proxy_manager = None
+    
+    if proxy_choice == "2":
+        # TOR setup
+        print(f"\n{Colors.INFO}[*] Checking TOR connection...{Colors.ENDC}")
+        proxy_manager = ProxyManager(use_tor=True)
+        
+        if proxy_manager.tor_available:
+            print(f"{Colors.SUCCESS}✓ TOR is running on 127.0.0.1:9050{Colors.ENDC}")
+            
+            # Test TOR connection
+            print(f"{Colors.INFO}[*] Testing TOR connection...{Colors.ENDC}")
+            if proxy_manager.test_tor_connection():
+                print(f"{Colors.SUCCESS}✓ Successfully connected through TOR network!{Colors.ENDC}")
+            else:
+                print(f"{Colors.WARNING}⚠ TOR is running but connection test failed{Colors.ENDC}")
+        else:
+            print(f"{Colors.ERROR}✗ TOR is not running!{Colors.ENDC}")
+            print(f"\n{Colors.INFO}To use TOR:{Colors.ENDC}")
+            print("  - Windows: Download TOR Browser from torproject.org")
+            print("  - Linux: sudo apt install tor && sudo systemctl start tor")
+            print("  - macOS: brew install tor && brew services start tor")
+            print(f"\n{Colors.WARNING}Continuing without TOR...{Colors.ENDC}")
+            proxy_manager = None
+    
+    elif proxy_choice == "3":
+        # Custom proxy setup
+        print(f"\n{Colors.INFO}Proxy format examples:{Colors.ENDC}")
+        print("  - HTTP: http://proxy.example.com:8080")
+        print("  - HTTPS: https://proxy.example.com:8080")
+        print("  - SOCKS5: socks5://proxy.example.com:1080")
+        print("  - With auth: http://user:pass@proxy.example.com:8080")
+        
+        proxy_input = input(f"\n{Colors.OKCYAN}Enter proxy URL(s) (comma-separated for multiple): {Colors.ENDC}").strip()
+        
+        if proxy_input:
+            proxy_list = [p.strip() for p in proxy_input.split(',') if p.strip()]
+            
+            if len(proxy_list) > 1:
+                rotate = input(f"{Colors.OKCYAN}Rotate through proxies? (y/n, default=y): {Colors.ENDC}").strip().lower()
+                rotate_proxy = rotate != 'n'
+            else:
+                rotate_proxy = False
+            
+            proxy_manager = ProxyManager(proxy_list=proxy_list, rotate_proxy=rotate_proxy)
+            print(f"{Colors.SUCCESS}✓ Configured {len(proxy_list)} proxy(s){Colors.ENDC}")
+            if rotate_proxy:
+                print(f"{Colors.INFO}[i] Proxy rotation enabled{Colors.ENDC}")
+        else:
+            print(f"{Colors.WARNING}⚠ No proxy provided, using direct connection{Colors.ENDC}")
+    
+    else:
+        print(f"{Colors.SUCCESS}✓ Using direct connection (no proxy){Colors.ENDC}")
+    
     # Initialize enumerator
     enumerator = SubdomainEnumerator(
         domain, 
@@ -925,7 +1532,9 @@ if __name__ == "__main__":
         max_workers=50,
         dns_server=dns_server,
         use_cloudflare=cloudflare_mode,
-        detected_nameservers=nameservers
+        detected_nameservers=nameservers,
+        verbose=verbose_mode,
+        proxy_manager=proxy_manager
     )
     
     print(f"\n{Colors.INFO}Starting deep enumeration for {Colors.DOMAIN}{domain}{Colors.ENDC}...")
@@ -966,7 +1575,7 @@ if __name__ == "__main__":
                 print(f"  - {Colors.DOMAIN}{domain_name}{Colors.ENDC}")
     
     # Export to JSON
-    enumerator.export_json(results, f"{domain}_deep_results.json")
+    enumerator.export_json(results, f"{domain}_deep_results.json", dns_info if dns_info_choice != 'n' else None)
     
     print(f"\n{Colors.HEADER}{'='*60}{Colors.ENDC}")
     print(f"{Colors.SUCCESS}✓ Enumeration finished successfully!{Colors.ENDC}")
