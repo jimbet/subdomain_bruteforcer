@@ -10,6 +10,7 @@ Support CloudFlare NameServer, or you can add your own NameServer
 
 You can also use your own wordlist, either local/online
 
+Now with an HTML JSON viewer for your convenience (view_me.html)
 
 How to execute:
 
@@ -27,3 +28,4 @@ python jim_sub_brute.py
 ![Screen-2](https://raw.githubusercontent.com/jimbet/subdomain_bruteforcer/refs/heads/main/screen-3.png)
 ![Screen-3](https://raw.githubusercontent.com/jimbet/subdomain_bruteforcer/refs/heads/main/screen-4.png)
 ![Screen-4](https://raw.githubusercontent.com/jimbet/subdomain_bruteforcer/refs/heads/main/screen-7.png)
+![HTML JSON](https://raw.githubusercontent.com/jimbet/subdomain_bruteforcer/refs/heads/main/html_json_viewer.jpg)
