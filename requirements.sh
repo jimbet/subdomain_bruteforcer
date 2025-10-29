@@ -6,11 +6,13 @@ sudo apt-get update
 # Install Python3 and pip (if not already installed)
 sudo apt-get install python3 python3-pip -y
 
-# Install dig
+# Install dnsutil
 sudo apt-get install dnsutils -y
 
 # Install Python requests library
 pip3 install --upgrade requests chardet urllib3 Mapping utils legacy-cgi charset-normalizer dnspython
+
+### If using Windows, you have to install GIT and Microsoft C++ Distribution Tool 14.x
 
 # Verify installation
 echo "=== Verification ==="
