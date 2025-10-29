@@ -10,7 +10,12 @@ sudo apt-get install python3 python3-pip -y
 sudo apt-get install dnsutils -y
 
 # Install Python requests library
-pip3 install --upgrade requests chardet urllib3 Mapping utils legacy-cgi charset-normalizer dnspython
+pip3 install --upgrade requests chardet urllib3 Mapping utils legacy-cgi charset-normalizer dnspython pysocks
+
+# TOR for anonymity
+sudo apt install tor
+sudo systemctl start tor
+sudo systemctl enable tor
 
 ### If using Windows, you have to install GIT and Microsoft C++ Distribution Tool 14.x
 
