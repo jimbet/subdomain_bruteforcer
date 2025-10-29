@@ -19,5 +19,5 @@ cd subdomain_bruteforcer
 chmod +x jim_sub_brute.py
 chmod +x requirements.sh
 bash requirements.sh
-python3 jim_sub_brute.py
+python jim_sub_brute.py
 ```
