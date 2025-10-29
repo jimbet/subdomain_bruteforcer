@@ -50,7 +50,7 @@ class CloudflareEnumerator:
     Specialized enumerator for Cloudflare-protected domains.
     """
 
-    def __init__(self, domain: str, timeout: int = 10):
+    def __init__(self, domain: str, timeout: int = 20):
         self.domain = domain
         self.timeout = timeout
         self.session = requests.Session()
@@ -239,7 +239,7 @@ class ProxyManager:
             import requests
             session = requests.Session()
             session.proxies = self.get_proxy_config()
-            response = session.get('https://check.torproject.org/api/ip', timeout=10)
+            response = session.get('https://check.torproject.org/api/ip', timeout=20)
             data = response.json()
             return data.get('IsTor', False)
         except:
@@ -252,11 +252,12 @@ class OSINTEnumerator:
     """
     
     def __init__(self, domain: str, timeout: int = 10, verbose: bool = False, 
-                 proxy_manager: Optional[ProxyManager] = None):
+                 proxy_manager: Optional[ProxyManager] = None, max_retries: int = 2):
         self.domain = domain
         self.timeout = timeout
         self.verbose = verbose
         self.proxy_manager = proxy_manager
+        self.max_retries = max_retries
         self.session = self._create_session()
     
     def _create_session(self) -> requests.Session:
@@ -288,8 +289,8 @@ class OSINTEnumerator:
             from urllib3.util.retry import Retry
             
             retry_strategy = Retry(
-                total=2,
-                backoff_factor=1,
+                total=self.max_retries,
+                backoff_factor=2,
                 status_forcelist=[429, 500, 502, 503, 504],
             )
             adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -303,11 +304,35 @@ class OSINTEnumerator:
     
     def _get_with_retry(self, url: str, **kwargs) -> Optional[requests.Response]:
         """Make request with proxy rotation on failure"""
+        # Set a longer timeout for slow services
+        if 'timeout' not in kwargs:
+            kwargs['timeout'] = self.timeout
+        
         if not self.proxy_manager or not self.proxy_manager.rotate_proxy:
-            return self.session.get(url, **kwargs)
+            # Single attempt with current proxy/direct connection
+            for attempt in range(self.max_retries):
+                try:
+                    response = self.session.get(url, **kwargs)
+                    if response.status_code == 200:
+                        return response
+                    elif response.status_code == 429:  # Rate limited
+                        if self.verbose:
+                            print(f"      {Colors.WARNING}[!]{Colors.ENDC} Rate limited, waiting...")
+                        time.sleep(3 * (attempt + 1))
+                        continue
+                except requests.exceptions.Timeout:
+                    if attempt < self.max_retries - 1 and self.verbose:
+                        print(f"      {Colors.WARNING}[!]{Colors.ENDC} Timeout, retrying... ({attempt + 1}/{self.max_retries})")
+                    time.sleep(2)
+                    continue
+                except Exception:
+                    if attempt < self.max_retries - 1:
+                        time.sleep(1)
+                        continue
+            return None
         
         # Try with different proxies if rotation is enabled
-        max_attempts = min(3, len(self.proxy_manager.proxy_list)) if self.proxy_manager.proxy_list else 1
+        max_attempts = min(self.max_retries, len(self.proxy_manager.proxy_list)) if self.proxy_manager.proxy_list else self.max_retries
         
         for attempt in range(max_attempts):
             try:
@@ -332,8 +357,9 @@ class OSINTEnumerator:
         subdomains = set()
         
         try:
+            # crt.sh is often slow, use longer timeout
             url = f"https://crt.sh/?q=%.{self.domain}&output=json"
-            response = self._get_with_retry(url, timeout=self.timeout)
+            response = self._get_with_retry(url, timeout=60)
             
             if response and response.status_code == 200:
                 try:
@@ -351,9 +377,12 @@ class OSINTEnumerator:
                         print(f"      {Colors.ERROR}✗{Colors.ENDC} crt.sh returned invalid JSON")
             else:
                 if self.verbose:
-                    print(f"      {Colors.ERROR}✗{Colors.ENDC} crt.sh returned status {response.status_code if response else 'No response'}")
+                    status = response.status_code if response else 'No response'
+                    print(f"      {Colors.ERROR}✗{Colors.ENDC} crt.sh returned status {status}")
+                else:
+                    print(f"      {Colors.ERROR}✗{Colors.ENDC} crt.sh unavailable (skipped)")
         except requests.exceptions.Timeout:
-            print(f"      {Colors.ERROR}✗{Colors.ENDC} crt.sh timed out (skipped)")
+            print(f"      {Colors.ERROR}✗{Colors.ENDC} crt.sh timed out (very slow/overloaded)")
         except Exception as e:
             if self.verbose:
                 print(f"      {Colors.ERROR}✗{Colors.ENDC} crt.sh error: {str(e)}")
@@ -392,9 +421,9 @@ class OSINTEnumerator:
         
         try:
             url = f"https://www.threatcrowd.org/searchApi/v2/domain/report/?domain={self.domain}"
-            response = self.session.get(url, timeout=self.timeout, verify=False)
+            response = self._get_with_retry(url, timeout=60, verify=False)
             
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 data = response.json()
                 subs = data.get('subdomains', [])
                 for subdomain in subs:
@@ -402,8 +431,19 @@ class OSINTEnumerator:
                         subdomains.add(subdomain)
                 
                 print(f"      {Colors.SUCCESS}✓{Colors.ENDC} Found {Colors.HIGHLIGHT}{len(subdomains)}{Colors.ENDC} subdomains from ThreatCrowd")
+            else:
+                if self.verbose:
+                    status = response.status_code if response else 'No response'
+                    print(f"      {Colors.ERROR}✗{Colors.ENDC} ThreatCrowd returned status {status}")
+                else:
+                    print(f"      {Colors.ERROR}✗{Colors.ENDC} ThreatCrowd unavailable (skipped)")
+        except requests.exceptions.Timeout:
+            print(f"      {Colors.ERROR}✗{Colors.ENDC} ThreatCrowd timed out (very slow)")
         except Exception as e:
-            print(f"      {Colors.ERROR}✗{Colors.ENDC} ThreatCrowd unavailable (skipped)")
+            if self.verbose:
+                print(f"      {Colors.ERROR}✗{Colors.ENDC} ThreatCrowd error: {str(e)}")
+            else:
+                print(f"      {Colors.ERROR}✗{Colors.ENDC} ThreatCrowd unavailable (skipped)")
         
         return subdomains
     
@@ -414,9 +454,9 @@ class OSINTEnumerator:
         
         try:
             url = f"https://otx.alienvault.com/api/v1/indicators/domain/{self.domain}/passive_dns"
-            response = self.session.get(url, timeout=self.timeout)
+            response = self._get_with_retry(url, timeout=60)
             
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 data = response.json()
                 for entry in data.get('passive_dns', []):
                     hostname = entry.get('hostname', '')
@@ -424,8 +464,19 @@ class OSINTEnumerator:
                         subdomains.add(hostname)
                 
                 print(f"      {Colors.SUCCESS}✓{Colors.ENDC} Found {Colors.HIGHLIGHT}{len(subdomains)}{Colors.ENDC} subdomains from AlienVault")
+            else:
+                if self.verbose:
+                    status = response.status_code if response else 'No response'
+                    print(f"      {Colors.ERROR}✗{Colors.ENDC} AlienVault returned status {status}")
+                else:
+                    print(f"      {Colors.ERROR}✗{Colors.ENDC} AlienVault unavailable (skipped)")
+        except requests.exceptions.Timeout:
+            print(f"      {Colors.ERROR}✗{Colors.ENDC} AlienVault timed out (very slow)")
         except Exception as e:
-            print(f"      {Colors.ERROR}✗{Colors.ENDC} AlienVault unavailable (skipped)")
+            if self.verbose:
+                print(f"      {Colors.ERROR}✗{Colors.ENDC} AlienVault error: {str(e)}")
+            else:
+                print(f"      {Colors.ERROR}✗{Colors.ENDC} AlienVault unavailable (skipped)")
         
         return subdomains
     
@@ -580,10 +631,11 @@ class OSINTEnumerator:
         subdomains = set()
         
         try:
+            # Use longer timeout for crt.sh
             url = f"https://crt.sh/?q=%.{self.domain}&output=json"
-            response = self.session.get(url, timeout=self.timeout)
+            response = self._get_with_retry(url, timeout=60)
             
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 try:
                     data = response.json()
                     
@@ -635,16 +687,21 @@ class OSINTEnumerator:
                 except json.JSONDecodeError:
                     if self.verbose:
                         print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers returned invalid JSON")
+                    else:
+                        print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers unavailable (skipped)")
             else:
                 if self.verbose:
-                    print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers returned status {response.status_code}")
+                    status = response.status_code if response else 'No response'
+                    print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers returned status {status}")
+                else:
+                    print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers unavailable (skipped)")
         except requests.exceptions.Timeout:
-            print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers timed out (skipped)")
+            print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers timed out (very slow/overloaded)")
         except Exception as e:
             if self.verbose:
                 print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers error: {str(e)}")
             else:
-                print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers search unavailable (skipped)")
+                print(f"      {Colors.ERROR}✗{Colors.ENDC} Free SSL providers unavailable (skipped)")
         
         return subdomains
     
@@ -717,6 +774,7 @@ class OSINTEnumerator:
         """Run all OSINT sources"""
         print(f"\n{Colors.HEADER}{'='*60}{Colors.ENDC}")
         print(f"{Colors.HEADER}OSINT Subdomain Discovery{Colors.ENDC}")
+        print(f"{Colors.INFO}Note: Some sources may be slow (crt.sh often takes 20-30s){Colors.ENDC}")
         print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}\n")
         
         all_subdomains = set()
@@ -739,7 +797,7 @@ class OSINTEnumerator:
             try:
                 results = source()
                 all_subdomains.update(results)
-                time.sleep(1)
+                time.sleep(0.5)  # Reduced delay between sources
             except Exception as e:
                 pass
         
@@ -1096,8 +1154,8 @@ class SubdomainEnumerator:
         self.verbose = verbose
         self.proxy_manager = proxy_manager
         self.dns_resolver = DNSResolver(timeout=timeout, dns_server=dns_server, use_cloudflare=use_cloudflare)
-        self.osint_enum = OSINTEnumerator(domain, timeout=10, verbose=verbose, proxy_manager=proxy_manager)
-        self.cloudflare_enum = CloudflareEnumerator(domain, timeout=10) if use_cloudflare else None
+        self.osint_enum = OSINTEnumerator(domain, timeout=30, verbose=verbose, proxy_manager=proxy_manager)
+        self.cloudflare_enum = CloudflareEnumerator(domain, timeout=30) if use_cloudflare else None
         self.dns_server = dns_server or (self.dns_resolver.dns_server if use_cloudflare else None)
     
     def resolve_subdomain(self, subdomain: str) -> Tuple[str, List[str], List[str]]:
@@ -1325,7 +1383,7 @@ if __name__ == "__main__":
     print(f"{Colors.HEADER}Detecting Nameservers...{Colors.ENDC}")
     print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}\n")
     
-    temp_resolver = DNSResolver(timeout=5)
+    temp_resolver = DNSResolver(timeout=20)
     nameservers = temp_resolver.get_nameservers(domain)
     
     if nameservers:
@@ -1528,7 +1586,7 @@ if __name__ == "__main__":
     # Initialize enumerator
     enumerator = SubdomainEnumerator(
         domain, 
-        timeout=5, 
+        timeout=25, 
         max_workers=50,
         dns_server=dns_server,
         use_cloudflare=cloudflare_mode,
