@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Advanced Subdomain Enumerator
+Advanced Subdomain Enumerator - Inspired by Sublist3r
 Combines DNS resolution with multiple OSINT sources for deep subdomain discovery
 
 Author: Sir Jimbet
-Version: 3.3.0
+Version: 3.3.5
 Features: dnspython + OSINT + Brute Force + Color Output + Free SSL + TOR/Proxy Support
 """
 
@@ -1353,10 +1353,10 @@ class SubdomainEnumerator:
 # Example usage
 if __name__ == "__main__":
     # Ask user for target domain
-    print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}")
-    print(f"{Colors.HEADER}Advanced Subdomain Enumerator (Sublist3r-style){Colors.ENDC}")
-    print(f"{Colors.HEADER}Using dnspython for cross-platform DNS resolution{Colors.ENDC}")
-    print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}")
+    print(f"{Colors.HEADER}{'='*70}{Colors.ENDC}")
+    print(f"{Colors.HEADER}Advanced Subdomain Enumerator (Sir Jimbet v3.3.5){Colors.ENDC}")
+    print(f"{Colors.HEADER}Using dnspython for cross-platform DNS resolution, OSINT, TOR/Proxy{Colors.ENDC}")
+    print(f"{Colors.HEADER}{'='*70}{Colors.ENDC}")
     
     domain = input(f"\n{Colors.OKCYAN}Enter the target domain (e.g., example.com): {Colors.ENDC}").strip()
     
