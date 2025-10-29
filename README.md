@@ -1,8 +1,8 @@
 # subdomain_bruteforcer
 
-To brute-force a subdomain for any TLD
+To brute-force a subdomain for any TLD using OSINT
 
-Now: Support TOR/Proxy for anonimity
+Now: Support TOR/Proxy for anonymity
 
 For Linux/Windows (need to install dependencies)
 
