@@ -2,7 +2,9 @@
 
 To brute-force a subdomain for any TLD
 
-For Linux environment only!
+Now: Support TOR/Proxy for anonimity
+
+For Linux/Windows (need to install dependencies)
 
 Support CloudFlare NameServer, or you can add your own NameServer
 
