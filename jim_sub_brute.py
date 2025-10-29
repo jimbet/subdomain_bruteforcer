@@ -7,7 +7,8 @@ Author: Sir Jimbet
 Version: 3.3.5
 Features: dnspython + OSINT + Brute Force + Color Output + Free SSL + TOR/Proxy Support
 """
-
+import colorama
+colorama.init(autoreset=True)
 import concurrent.futures
 from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
