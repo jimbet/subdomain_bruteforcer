@@ -21,3 +21,9 @@ chmod +x requirements.sh
 bash requirements.sh
 python jim_sub_brute.py
 ```
+<br><br>
+
+![Screen-1](https://raw.githubusercontent.com/jimbet/subdomain_bruteforcer/refs/heads/main/screen-1.png)
+![Screen-2](https://raw.githubusercontent.com/jimbet/subdomain_bruteforcer/refs/heads/main/screen-3.png)
+![Screen-3](https://raw.githubusercontent.com/jimbet/subdomain_bruteforcer/refs/heads/main/screen-4.png)
+![Screen-4](https://raw.githubusercontent.com/jimbet/subdomain_bruteforcer/refs/heads/main/screen-7.png)
