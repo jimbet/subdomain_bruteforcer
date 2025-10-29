@@ -49,7 +49,7 @@ eval "$PM_INSTALL $PYTHON_PKGS"
 eval "$PM_INSTALL $DNS_PKG"
 
 # Install Python requests library (and dependencies; note: original list may have typos like 'Mapping', 'utils', 'legacy-cgi' - verify packages)
-pip3 install --upgrade requests chardet urllib3 Mapping utils legacy-cgi charset-normalizer dnspython pysocks
+pip3 install --upgrade requests chardet urllib3 Mapping utils legacy-cgi charset-normalizer dnspython pysocks colorama
 
 # TOR for anonymity
 eval "$PM_INSTALL $TOR_PKGS"
