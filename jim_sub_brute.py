@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
 """
 Advanced Subdomain Enumerator - Inspired by Sublist3r
-Combines dig with multiple OSINT sources for deep subdomain discovery
+Combines DNS resolution with multiple OSINT sources for deep subdomain discovery
 
 Author: Sir Jimbet
-Version: 3.1.0
-Features: dig + OSINT + Brute Force + Color Outputexa
+Version: 3.2.0
+Features: dnspython + OSINT + Brute Force + Color Output
 """
 
-import subprocess
-import re
 import concurrent.futures
 from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
 import json
-import shutil
 import sys
 import requests
 import time
 import warnings
-from urllib.parse import quote
+import dns.resolver
+import dns.exception
 
 # Suppress SSL warnings for problematic sources
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
@@ -92,6 +90,7 @@ class CloudflareEnumerator:
         subdomains = set()
         
         try:
+            import re
             url = f"https://securitytrails.com/list/apex_domain/{self.domain}"
             response = self.session.get(url, timeout=self.timeout)
             
@@ -303,6 +302,7 @@ class OSINTEnumerator:
         subdomains = set()
         
         try:
+            import re
             url = f"https://rapiddns.io/subdomain/{self.domain}?full=1"
             response = self.session.get(url, timeout=self.timeout)
             
@@ -370,6 +370,7 @@ class OSINTEnumerator:
         subdomains = set()
         
         try:
+            import re
             url = f"https://web.archive.org/cdx/search/cdx?url=*.{self.domain}/*&output=json&fl=original&collapse=urlkey"
             response = self.session.get(url, timeout=self.timeout)
             
@@ -390,71 +391,13 @@ class OSINTEnumerator:
         
         return subdomains
     
-    def search_commoncrawl(self) -> Set[str]:
-        """Search CommonCrawl"""
-        print(f"  {Colors.INFO}[*]{Colors.ENDC} Searching CommonCrawl...")
-        subdomains = set()
-        
-        try:
-            url = f"https://index.commoncrawl.org/CC-MAIN-2024-10-index?url=*.{self.domain}&output=json"
-            response = self.session.get(url, timeout=self.timeout)
-            
-            if response.status_code == 200:
-                for line in response.text.split('\n'):
-                    if line.strip():
-                        try:
-                            data = json.loads(line)
-                            full_url = data.get('url', '')
-                            match = re.search(r'https?://([^/]+)', full_url)
-                            if match:
-                                extracted_domain = match.group(1).lower()
-                                if extracted_domain.endswith(self.domain):
-                                    subdomains.add(extracted_domain)
-                        except:
-                            pass
-                
-                print(f"      {Colors.SUCCESS}✓{Colors.ENDC} Found {Colors.HIGHLIGHT}{len(subdomains)}{Colors.ENDC} subdomains from CommonCrawl")
-        except Exception as e:
-            print(f"      {Colors.ERROR}✗{Colors.ENDC} CommonCrawl unavailable (skipped)")
-        
-        return subdomains
-    
-    def search_webarchive(self) -> Set[str]:
-        """Search Web Archive"""
-        print(f"  {Colors.INFO}[*]{Colors.ENDC} Searching Archive.org...")
-        subdomains = set()
-        
-        try:
-            url = f"https://web.archive.org/__wb/search/metadata?url=*.{self.domain}&limit=1000"
-            response = self.session.get(url, timeout=self.timeout)
-            
-            if response.status_code == 200:
-                lines = response.text.split('\n')
-                for line in lines:
-                    if line.strip():
-                        try:
-                            data = json.loads(line)
-                            original_url = data.get('original', '')
-                            match = re.search(r'https?://([^/]+)', original_url)
-                            if match:
-                                extracted_domain = match.group(1).lower()
-                                if extracted_domain.endswith(self.domain):
-                                    subdomains.add(extracted_domain)
-                        except:
-                            pass
-                
-                print(f"      {Colors.SUCCESS}✓{Colors.ENDC} Found {Colors.HIGHLIGHT}{len(subdomains)}{Colors.ENDC} subdomains from Archive.org")
-        except Exception as e:
-            print(f"      {Colors.ERROR}✗{Colors.ENDC} Archive.org unavailable (skipped)")
-        
-        return subdomains
-    
     def search_dnsdumpster(self) -> Set[str]:
         """Search DNSDumpster"""
         print(f"  {Colors.INFO}[*]{Colors.ENDC} Searching DNSDumpster...")
         subdomains = set()
         
         try:
+            import re
             url = "https://dnsdumpster.com/"
             response = self.session.get(url, timeout=self.timeout)
             
@@ -504,8 +447,6 @@ class OSINTEnumerator:
             self.search_anubis,
             self.search_certspotter,
             self.search_wayback,
-            self.search_commoncrawl,
-            self.search_webarchive,
             self.search_dnsdumpster
         ]
         
@@ -521,52 +462,41 @@ class OSINTEnumerator:
         return all_subdomains
 
 
-class DigResolver:
+class DNSResolver:
     """
-    DNS resolver using the dig command-line tool with Cloudflare optimization.
+    DNS resolver using dnspython library with Cloudflare optimization.
     """
     
     def __init__(self, timeout: int = 5, dns_server: Optional[str] = None, use_cloudflare: bool = False):
         self.timeout = timeout
         self.dns_server = dns_server
         self.use_cloudflare = use_cloudflare
-        self.dig_available = self._check_dig_available()
+        
+        # Create resolver
+        self.resolver = dns.resolver.Resolver()
+        self.resolver.timeout = timeout
+        self.resolver.lifetime = timeout
         
         # If Cloudflare mode, use their DNS servers
         if self.use_cloudflare and not self.dns_server:
             self.dns_server = "1.1.1.1"  # Cloudflare DNS
-    
-    def _check_dig_available(self) -> bool:
-        """Check if dig command is available on the system."""
-        return shutil.which('dig') is not None
+        
+        # Configure custom DNS server if provided
+        if self.dns_server:
+            self.resolver.nameservers = [self.dns_server]
     
     def get_nameservers(self, domain: str) -> List[str]:
-        """Get nameservers for a domain using dig"""
-        if not self.dig_available:
-            return []
-        
-        cmd = ['dig', '+short', 'NS', domain]
-        
+        """Get nameservers for a domain"""
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout + 2
-            )
-            
-            if result.returncode == 0:
-                nameservers = []
-                lines = result.stdout.strip().split('\n')
-                for line in lines:
-                    ns = line.strip().rstrip('.')
-                    if ns:
-                        nameservers.append(ns.lower())
-                return nameservers
+            answers = self.resolver.resolve(domain, 'NS')
+            nameservers = []
+            for rdata in answers:
+                ns = str(rdata.target).rstrip('.')
+                if ns:
+                    nameservers.append(ns.lower())
+            return nameservers
         except Exception:
-            pass
-        
-        return []
+            return []
     
     def is_cloudflare_ns(self, nameservers: List[str]) -> bool:
         """Check if nameservers belong to Cloudflare"""
@@ -582,51 +512,28 @@ class DigResolver:
                     return True
         return False
     
-    def resolve_with_dig(self, domain: str, record_type: str = 'A') -> List[str]:
-        """Resolve domain using dig command."""
-        if not self.dig_available:
-            raise RuntimeError("dig command not found")
-        
-        cmd = ['dig', '+short', '+time=' + str(self.timeout)]
-        
-        # Cloudflare-specific optimizations
-        if self.use_cloudflare:
-            cmd.extend(['+noedns', '+nocookie'])  # Disable EDNS for better compatibility
-        
-        if self.dns_server:
-            cmd.append('@' + self.dns_server)
-        
-        cmd.extend([domain, record_type])
-        
+    def resolve(self, domain: str, record_type: str = 'A') -> List[str]:
+        """Resolve domain using dnspython"""
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout + 2
-            )
+            answers = self.resolver.resolve(domain, record_type)
+            addresses = []
             
-            if result.returncode == 0:
-                lines = result.stdout.strip().split('\n')
-                addresses = []
-                
-                for line in lines:
-                    line = line.strip()
-                    if line and not line.startswith(';'):
-                        if record_type == 'A':
-                            if self._is_valid_ipv4(line):
-                                addresses.append(line)
-                        else:
-                            addresses.append(line)
-                
-                return addresses
+            for rdata in answers:
+                if record_type == 'A':
+                    addresses.append(str(rdata))
+                elif record_type == 'AAAA':
+                    addresses.append(str(rdata))
+                elif record_type == 'CNAME':
+                    addresses.append(str(rdata.target).rstrip('.'))
+                else:
+                    addresses.append(str(rdata))
             
-        except subprocess.TimeoutExpired:
-            pass
+            return addresses
+            
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers, dns.exception.Timeout):
+            return []
         except Exception:
-            pass
-        
-        return []
+            return []
     
     def check_cname_chain(self, domain: str) -> List[str]:
         """Follow CNAME chain to discover additional subdomains (useful for Cloudflare)"""
@@ -636,9 +543,9 @@ class DigResolver:
         depth = 0
         
         while depth < max_depth:
-            result = self.resolve_with_dig(current, 'CNAME')
+            result = self.resolve(current, 'CNAME')
             if result:
-                cname = result[0].rstrip('.')
+                cname = result[0]
                 cnames.append(cname)
                 current = cname
                 depth += 1
@@ -646,21 +553,11 @@ class DigResolver:
                 break
         
         return cnames
-    
-    def _is_valid_ipv4(self, ip: str) -> bool:
-        """Validate IPv4 address format."""
-        parts = ip.split('.')
-        if len(parts) != 4:
-            return False
-        try:
-            return all(0 <= int(part) <= 255 for part in parts)
-        except ValueError:
-            return False
 
 
 class SubdomainEnumerator:
     """
-    Advanced subdomain enumerator combining OSINT + DNS verification with dig.
+    Advanced subdomain enumerator combining OSINT + DNS verification with dnspython.
     Includes automatic Cloudflare detection and optimization.
     """
     
@@ -672,33 +569,26 @@ class SubdomainEnumerator:
         self.max_workers = max_workers
         self.use_cloudflare = use_cloudflare
         self.detected_nameservers = detected_nameservers or []
-        self.dig_resolver = DigResolver(timeout=timeout, dns_server=dns_server, use_cloudflare=use_cloudflare)
+        self.dns_resolver = DNSResolver(timeout=timeout, dns_server=dns_server, use_cloudflare=use_cloudflare)
         self.osint_enum = OSINTEnumerator(domain, timeout=10)
         self.cloudflare_enum = CloudflareEnumerator(domain, timeout=10) if use_cloudflare else None
-        self.dns_server = dns_server or (self.dig_resolver.dns_server if use_cloudflare else None)
-        
-        if not self.dig_resolver.dig_available:
-            print(f"{Colors.ERROR}⚠ WARNING: dig command not found!{Colors.ENDC}")
-            print("Please install: apt-get install dnsutils (Debian/Ubuntu)")
-            print("          or: yum install bind-utils (RHEL/CentOS)")
-            print("          or: brew install bind (macOS)")
-            sys.exit(1)
+        self.dns_server = dns_server or (self.dns_resolver.dns_server if use_cloudflare else None)
     
     def resolve_subdomain(self, subdomain: str) -> Tuple[str, List[str], List[str]]:
-        """Resolve a subdomain to its IPv4 addresses using dig."""
-        ipv4_addresses = self.dig_resolver.resolve_with_dig(subdomain, 'A')
+        """Resolve a subdomain to its IPv4 addresses using dnspython."""
+        ipv4_addresses = self.dns_resolver.resolve(subdomain, 'A')
         
         # For Cloudflare sites, also check CNAME chains
         cnames = []
         if self.use_cloudflare:
-            cnames = self.dig_resolver.check_cname_chain(subdomain)
+            cnames = self.dns_resolver.check_cname_chain(subdomain)
         
         return subdomain, ipv4_addresses, cnames
     
-    def verify_subdomains_with_dig(self, subdomains: Set[str], show_progress: bool = True) -> Dict[str, List[str]]:
-        """Verify discovered subdomains using dig."""
+    def verify_subdomains(self, subdomains: Set[str], show_progress: bool = True) -> Dict[str, List[str]]:
+        """Verify discovered subdomains using dnspython."""
         print(f"\n{Colors.HEADER}{'='*60}{Colors.ENDC}")
-        print(f"{Colors.HEADER}Verifying {len(subdomains)} subdomains with dig{Colors.ENDC}")
+        print(f"{Colors.HEADER}Verifying {len(subdomains)} subdomains with DNS{Colors.ENDC}")
         if self.dns_server:
             print(f"{Colors.INFO}DNS Server: {self.dns_server}{Colors.ENDC}")
         if self.use_cloudflare:
@@ -746,7 +636,7 @@ class SubdomainEnumerator:
         # If we found new subdomains via CNAME, resolve them too
         if discovered_from_cnames:
             print(f"\n  {Colors.INFO}[*]{Colors.ENDC} Found {Colors.HIGHLIGHT}{len(discovered_from_cnames)}{Colors.ENDC} additional subdomains via CNAME chains")
-            additional_results = self.verify_subdomains_with_dig(discovered_from_cnames, show_progress=False)
+            additional_results = self.verify_subdomains(discovered_from_cnames, show_progress=False)
             results.update(additional_results)
         
         return results
@@ -761,7 +651,7 @@ class SubdomainEnumerator:
         # Generate full subdomains
         subdomains = [f"{word}.{self.domain}" for word in wordlist]
         
-        return self.verify_subdomains_with_dig(set(subdomains), show_progress)
+        return self.verify_subdomains(set(subdomains), show_progress)
     
     def enumerate_deep(self, use_osint: bool = True, use_bruteforce: bool = True, 
                        wordlist: Optional[List[str]] = None) -> Dict[str, List[str]]:
@@ -788,9 +678,9 @@ class SubdomainEnumerator:
             bruteforce_subs = [f"{word}.{self.domain}" for word in wordlist]
             all_subdomains.update(bruteforce_subs)
         
-        # Step 4: Verify all discovered subdomains with dig
+        # Step 4: Verify all discovered subdomains with DNS
         if all_subdomains:
-            verified = self.verify_subdomains_with_dig(all_subdomains, show_progress=True)
+            verified = self.verify_subdomains(all_subdomains, show_progress=True)
             return verified
         
         return {}
@@ -857,7 +747,7 @@ class SubdomainEnumerator:
         output = {
             "domain": self.domain,
             "dns_server": self.dns_server,
-            "resolver": "dig + OSINT",
+            "resolver": "dnspython + OSINT",
             "total_subdomains": len(subdomain_results),
             "total_unique_ips": len(ip_groups),
             "subdomains": subdomain_results,
@@ -876,6 +766,7 @@ if __name__ == "__main__":
     # Ask user for target domain
     print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}")
     print(f"{Colors.HEADER}Advanced Subdomain Enumerator (Sublist3r-style){Colors.ENDC}")
+    print(f"{Colors.HEADER}Using dnspython for cross-platform DNS resolution{Colors.ENDC}")
     print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}")
     
     domain = input(f"\n{Colors.OKCYAN}Enter the target domain (e.g., example.com): {Colors.ENDC}").strip()
@@ -896,7 +787,7 @@ if __name__ == "__main__":
     print(f"{Colors.HEADER}Detecting Nameservers...{Colors.ENDC}")
     print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}\n")
     
-    temp_resolver = DigResolver(timeout=5)
+    temp_resolver = DNSResolver(timeout=5)
     nameservers = temp_resolver.get_nameservers(domain)
     
     if nameservers:
@@ -916,7 +807,6 @@ if __name__ == "__main__":
             # Also try to use detected Cloudflare NS directly
             cloudflare_ns = [ns for ns in nameservers if 'cloudflare' in ns]
             if cloudflare_ns:
-                # Extract IP from NS if possible or use the first CF nameserver
                 print(f"{Colors.SUCCESS}✓ Will also query Cloudflare nameserver: {Colors.INFO}{cloudflare_ns[0]}{Colors.ENDC}")
         else:
             print(f"\n{Colors.SUCCESS}✓ No Cloudflare detected (standard enumeration mode){Colors.ENDC}")
@@ -926,7 +816,7 @@ if __name__ == "__main__":
             # Use detected nameserver for queries
             if nameservers:
                 # Try to resolve the nameserver to IP
-                ns_ip = temp_resolver.resolve_with_dig(nameservers[0], 'A')
+                ns_ip = temp_resolver.resolve(nameservers[0], 'A')
                 if ns_ip:
                     dns_server = ns_ip[0]
                     print(f"{Colors.SUCCESS}✓ Using detected nameserver: {Colors.INFO}{nameservers[0]}{Colors.ENDC} ({Colors.IP}{dns_server}{Colors.ENDC})")
@@ -1009,8 +899,7 @@ if __name__ == "__main__":
         
         elif wordlist_choice == "3":
             # Load from URL
-            # example URL
-            print(f"{Colors.INFO}**Popular subdomain wordlists:Please copy-paste! :**{Colors.ENDC}")
+            print(f"{Colors.INFO}Popular subdomain wordlists (copy-paste):{Colors.ENDC}")
             print(f"{Colors.INFO}https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-5000.txt{Colors.ENDC}")
             print(f"{Colors.INFO}https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-20000.txt{Colors.ENDC}")
             print(f"{Colors.INFO}https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/fierce-hostlist.txt{Colors.ENDC}")
