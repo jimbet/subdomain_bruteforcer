@@ -10,7 +10,7 @@ sudo apt-get install python3 python3-pip -y
 sudo apt-get install dnsutils -y
 
 # Install Python requests library
-pip3 install requests dig chardet urllib3 Mapping utils legacy-cgi
+pip3 install --upgrade requests chardet urllib3 Mapping utils legacy-cgi charset-normalizer dnspython
 
 # Verify installation
 echo "=== Verification ==="
