@@ -117,16 +117,16 @@ class CloudflareEnumerator:
             # Common Cloudflare patterns
             "direct", "origin", "direct-connect", "origin-server",
             # Geographic patterns
-            "us", "eu", "asia", "uk", "de", "fr", "au", "ca", "jp",
+            "us", "eu", "asia", "uk", "de", "fr", "au", "ca", "jp", "my", "sg", "id", "th", "ph", "ng", "in",
             # Service patterns    
             "assets", "static", "media", "images", "img", "cdn", "cdn1", "cdn2",
             "files", "uploads", "downloads", "storage",
             # API patterns
-            "api", "api1", "api2", "rest", "graphql", "ws", "websocket",
+            "api", "api1", "api2", "rest", "graphql", "ws", "websocket", "vless", "vmess", "trojan",
             # Application patterns
             "app", "webapp", "web", "portal", "dashboard", "admin", "panel",
             # Environment patterns
-            "prod", "production", "staging", "stage", "dev", "development", "test",
+            "prod", "production", "staging", "stage", "dev", "development", "test", "st",
             # Load balancer patterns
             "lb", "lb1", "lb2", "loadbalancer",
             # Worker patterns (Cloudflare Workers)
@@ -135,6 +135,8 @@ class CloudflareEnumerator:
             "pages", "preview",
             # Stream patterns
             "stream", "video", "live",
+            # Other pattern
+            "xyz", "at", "ly", "ee", "iptv", "info", "biz", "pro", "nat", "proxy",
         ]
         
         subdomains = set()
@@ -1468,7 +1470,7 @@ if __name__ == "__main__":
         "api-gateway", "gateway", "proxy", "lb", "balancer", "edge", "node", 
         "client", "customer", "partner", "vendor", "internal", "external",
         "dashboard", "console", "manage", "control", "monitor", "analytics",
-        "ws", "websocket", "socket", "realtime", "live", "stream", "broadcast"
+        "ws", "websocket", "vless", "vmess", "socket", "realtime", "live", "stream", "broadcast"
     ]
     
     # Ask if user wants to use custom wordlist
