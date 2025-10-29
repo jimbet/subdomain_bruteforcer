@@ -56,12 +56,11 @@ eval "$PM_INSTALL $TOR_PKGS"
 eval "$START_TOR"
 eval "$ENABLE_TOR"
 
-### If using Windows, you have to install GIT and Microsoft C++ Distribution Tool 14.x
+### If using Windows, you have to install GIT and Microsoft C++ Distribution Tool >14.x
 ### Download TOR - [https://www.torproject.org/download/tor/](https://www.torproject.org/download/tor/)
 
 # Verify installation
 echo "=== Verification ==="
 python3 --version
-dig -v
 python3 -c "import requests; print('requests version:', requests.__version__)"
 echo "=== Installation Complete! ==="
