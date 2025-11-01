@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Advanced Subdomain Enumerator - Inspired by Sublist3r
+Advanced Subdomain Enumerator
 Combines DNS resolution with multiple OSINT sources for deep subdomain discovery
 
 Author: Sir Jimbet
